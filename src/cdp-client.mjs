@@ -70,7 +70,7 @@ export async function getSources() {
 }
 
 /** Candidate ports honouring the current preference. */
-function candidatePorts() {
+export function candidatePorts() {
     const sources = devToolsSources();
     if (cdpPreference === 'ide') {
         return [...sources.filter(s => s.id === 'ide').map(s => s.port), 9222];

@@ -6,6 +6,7 @@
  */
 
 import https from 'https';
+import http from 'http';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 
@@ -75,7 +76,10 @@ async function findLanguageServer() {
             const cmdLine = proc.CommandLine || '';
 
             // Check if this is the Antigravity language server
-            if (!cmdLine.includes('--extension_server_port') || !cmdLine.includes('--csrf_token')) {
+            if (!cmdLine.includes('--csrf_token')) {
+                continue;
+            }
+            if (!cmdLine.includes('--extension_server_port') && !cmdLine.includes('--https_server_port')) {
                 continue;
             }
             if (!/--app_data_dir\s+antigravity\b/i.test(cmdLine)) {
@@ -97,12 +101,12 @@ async function findLanguageServer() {
 
             // Test each port to find the API port
             for (const port of ports) {
-                const works = await testApiPort(port, token);
-                if (works) {
-                    const connection = { port, token, pid };
+                const res = await testApiPort(port, token);
+                if (res.works) {
+                    const connection = { port, token, pid, isHttps: res.isHttps };
                     cachedConnection = connection;
                     lastConnectionCheck = Date.now();
-                    console.log(`[QuotaService] Found working API on port ${port}`);
+                    console.log(`[QuotaService] Found working API on port ${port} (HTTPS: ${res.isHttps})`);
                     return connection;
                 }
             }
@@ -141,53 +145,57 @@ async function getProcessListeningPorts(pid) {
 }
 
 /**
- * Test if a port responds to the API
+ * Test if a port responds to the API (supports both HTTP and HTTPS)
  */
 async function testApiPort(port, token) {
-    return new Promise((resolve) => {
-        const data = JSON.stringify({ metadata: { ideName: 'antigravity' } });
+    for (const proto of [http, https]) {
+        const works = await new Promise((resolve) => {
+            const data = JSON.stringify({ metadata: { ideName: 'antigravity' } });
 
-        const options = {
-            hostname: '127.0.0.1',
-            port,
-            path: GET_USER_STATUS_PATH,
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Content-Length': Buffer.byteLength(data),
-                'Connect-Protocol-Version': '1',
-                'X-Codeium-Csrf-Token': token
-            },
-            rejectUnauthorized: false,
-            timeout: 3000
-        };
+            const options = {
+                hostname: '127.0.0.1',
+                port,
+                path: GET_USER_STATUS_PATH,
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Content-Length': Buffer.byteLength(data),
+                    'Connect-Protocol-Version': '1',
+                    'X-Codeium-Csrf-Token': token
+                },
+                rejectUnauthorized: false,
+                timeout: 3000
+            };
 
-        const req = https.request(options, (res) => {
-            let body = '';
-            res.on('data', chunk => body += chunk);
-            res.on('end', () => {
-                // Accept any successful response or valid JSON error
-                resolve(res.statusCode === 200 || body.includes('"user_status"'));
+            const req = proto.request(options, (res) => {
+                let body = '';
+                res.on('data', chunk => body += chunk);
+                res.on('end', () => {
+                    resolve(res.statusCode === 200 || body.includes('"user_status"') || body.includes('userStatus'));
+                });
             });
-        });
 
-        req.on('error', () => resolve(false));
-        req.on('timeout', () => {
-            req.destroy();
-            resolve(false);
-        });
+            req.on('error', () => resolve(false));
+            req.on('timeout', () => {
+                req.destroy();
+                resolve(false);
+            });
 
-        req.write(data);
-        req.end();
-    });
+            req.write(data);
+            req.end();
+        });
+        if (works) return { works: true, isHttps: proto === https };
+    }
+    return { works: false };
 }
 
 /**
  * Make API request to the language server
  */
-function apiRequest(port, token, path, body) {
+function apiRequest(port, token, path, body, isHttps = false) {
     return new Promise((resolve, reject) => {
         const data = JSON.stringify(body);
+        const proto = isHttps ? https : http;
 
         const options = {
             hostname: '127.0.0.1',
@@ -204,7 +212,7 @@ function apiRequest(port, token, path, body) {
             timeout: 10000
         };
 
-        const req = https.request(options, (res) => {
+        const req = proto.request(options, (res) => {
             let responseData = '';
             res.on('data', chunk => responseData += chunk);
             res.on('end', () => {
@@ -351,7 +359,8 @@ export async function getQuota() {
                     extensionName: 'antigravity',
                     locale: 'en'
                 }
-            }
+            },
+            connection.isHttps
         );
 
         console.log('[QuotaService] API Response received');

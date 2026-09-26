@@ -317,6 +317,26 @@ function buildExtractionScript(sel) {
 const CONVERSATIONS_SCRIPT = `(() => {
     const m = location.pathname.match(/\\/c\\/([0-9a-f-]+)/i);
     const activeId = m ? m[1] : null;
+
+    // Antigravity 2.0 sidebar rows
+    const rows = [...document.querySelectorAll('[data-testid="conversation-row-sidebar"]')];
+    if (rows.length > 0) {
+        const conversations = rows.map(r => {
+            const link = r.querySelector('a') || r.closest('a');
+            const href = link ? link.getAttribute('href') : '';
+            const idMatch = href ? href.match(/\\/c\\/([0-9a-f-]+)/i) : null;
+            const id = idMatch ? idMatch[1] : '';
+            let title = link ? link.getAttribute('aria-label') : '';
+            if (!title) {
+                title = (r.innerText || '').replace(/\\s+/g, ' ').trim();
+            }
+            title = title.replace(/\\s+\\d+[hdwm]$/i, '').trim();
+            return { id, title, active: id === activeId };
+        }).filter(c => c.id && c.title);
+        return { found: conversations.length > 0, activeId, conversations };
+    }
+
+    // Fallback for 1.x pills
     const pills = [...document.querySelectorAll('[data-testid^="convo-pill-"]')];
     const conversations = pills.map(p => {
         const id = p.getAttribute('data-testid').replace('convo-pill-', '');
@@ -348,6 +368,17 @@ export async function extractConversations(cdp, contextId) {
  */
 export function buildSwitchConversationScript(id) {
     return `(() => {
+        // Antigravity 2.0 sidebar rows
+        const rows = [...document.querySelectorAll('[data-testid="conversation-row-sidebar"]')];
+        for (const r of rows) {
+            const link = r.querySelector('a') || r.closest('a');
+            if (link && link.getAttribute('href') && link.getAttribute('href').includes(${JSON.stringify(id)})) {
+                link.click();
+                return { found: true };
+            }
+        }
+
+        // Fallback for 1.x pills
         const pill = document.querySelector('[data-testid="convo-pill-' + ${JSON.stringify(id)} + '"]');
         if (!pill) return { found: false };
         // prefer a clickable ancestor (anchor/button/row) if present
@@ -377,6 +408,10 @@ export async function switchConversation(cdp, contextId, id) {
 
 /** Click the IDE's "New Conversation" button (aria-label). */
 const NEW_CONVERSATION_SCRIPT = `(() => {
+    // 2.0 testid
+    const btn2 = document.querySelector('[data-testid="new-conversation-button"]');
+    if (btn2) { btn2.click(); return { found: true }; }
+
     const btn = document.querySelector('[aria-label="New Conversation"]')
         || [...document.querySelectorAll('button')].find(b => /new conversation/i.test((b.innerText || '').trim()));
     if (!btn) return { found: false };

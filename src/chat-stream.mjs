@@ -10,7 +10,7 @@
 import WebSocket from 'ws';
 import * as TelegramBot from './telegram-bot.mjs';
 import * as Config from './config.mjs';
-import { clickElementByXPath, getPreferredWorkspace } from './cdp-client.mjs';
+import { clickElementByXPath, getPreferredWorkspace, candidatePorts } from './cdp-client.mjs';
 import { extractStructured, extractConversations, switchConversation, newConversation } from './antigravity-dom.mjs';
 
 // Notification state tracker (avoids duplicate alerts)
@@ -58,8 +58,9 @@ function hashString(str) {
 async function findTargets() {
     const targets = [];
     const preferred = getPreferredWorkspace();
+    const ports = Array.from(new Set([...(candidatePorts?.() || []), ...CDP_PORTS]));
 
-    for (const port of CDP_PORTS) {
+    for (const port of ports) {
         try {
             const res = await fetch(`http://127.0.0.1:${port}/json/list`, {
                 signal: AbortSignal.timeout(2000)
@@ -744,34 +745,58 @@ export async function startChatStream(updateCallback, pollMs = 2000) {
         return { success: false, error: 'No CDP targets found' };
     }
 
-    // Try each target until we find one with #cascade
+    // Try each target until we find one with chat (cascade or Antigravity 2.0)
     for (const target of targets) {
         try {
             console.log(`🔍 Checking ${target.title}`);
             const cdp = await connectCDP(target.webSocketDebuggerUrl);
-            const contextId = await findCascadeContext(cdp);
+            let contextId = await findCascadeContext(cdp);
+            let is2_0 = false;
+
+            if (!contextId) {
+                const structured = await findStructuredContext(cdp);
+                if (structured) {
+                    contextId = structured.contextId;
+                    is2_0 = true;
+                }
+            }
 
             if (contextId) {
-                console.log(`✅ Found cascade in context ${contextId}`);
+                console.log(`✅ Found chat in context ${contextId} (Antigravity 2.0: ${is2_0})`);
                 connection = cdp;
 
                 // Start polling
                 const poll = async () => {
                     if (!connection) return;
 
-                    const contextId = await findCascadeContext(connection);
-                    if (!contextId) return;
-
-                    const chat = await captureChat(connection, contextId);
-                    if (chat && chat.html) {
-                        const hash = hashString(chat.html);
-                        if (hash !== lastHash) {
-                            lastHash = hash;
-                            if (onChatUpdate) {
-                                onChatUpdate(chat);
+                    if (is2_0) {
+                        try {
+                            const model = await extractStructured(connection, contextId);
+                            if (model && model.found) {
+                                const hash = hashString(JSON.stringify(model));
+                                if (hash !== lastHash) {
+                                    lastHash = hash;
+                                    if (onChatUpdate) {
+                                        onChatUpdate({ messageCount: model.messages.length, messages: model.messages });
+                                    }
+                                }
                             }
-                            // Telegram notifications on state changes
-                            checkAndNotify(chat.html);
+                        } catch (e) { }
+                    } else {
+                        const curCtxId = await findCascadeContext(connection);
+                        if (!curCtxId) return;
+
+                        const chat = await captureChat(connection, curCtxId);
+                        if (chat && chat.html) {
+                            const hash = hashString(chat.html);
+                            if (hash !== lastHash) {
+                                lastHash = hash;
+                                if (onChatUpdate) {
+                                    onChatUpdate(chat);
+                                }
+                                // Telegram notifications on state changes
+                                checkAndNotify(chat.html);
+                            }
                         }
                     }
 
@@ -794,7 +819,7 @@ export async function startChatStream(updateCallback, pollMs = 2000) {
         }
     }
 
-    return { success: false, error: 'No cascade element found in any target' };
+    return { success: false, error: 'No chat container found in any target' };
 }
 
 /**
