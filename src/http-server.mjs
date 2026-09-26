@@ -2097,6 +2097,82 @@ app.post('/api/launch/ide', Pairing.requirePaired, (req, res) =>
 app.post('/api/launch/conversation', Pairing.requirePaired, (req, res) =>
     launchAntigravity('app', req.body?.path, res));
 
+// Switch Antigravity Account/Profile remotely from mobile
+app.post('/api/account/switch', async (req, res) => {
+    try {
+        const profile = req.body?.profile || req.query?.profile || 'default';
+        const exe = findAntigravityExe('app');
+        if (!exe) return res.status(404).json({ success: false, error: 'Antigravity.exe not found' });
+
+        // Terminate existing Antigravity processes
+        spawn('taskkill', ['/F', '/IM', 'Antigravity.exe'], { windowsHide: true });
+
+        await new Promise(r => setTimeout(r, 2000));
+
+        const args = [];
+        if (profile === '2' || profile === 'account2') {
+            const dataDir = join(process.env.APPDATA, 'Antigravity_Account2');
+            args.push(`--user-data-dir=${dataDir}`);
+        }
+
+        spawn(exe, args, { detached: true, stdio: 'ignore' }).unref();
+
+        res.json({ success: true, activeProfile: profile });
+    } catch (e) {
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
+
+// Mobile-friendly account switch web page
+app.get('/switch', (req, res) => {
+    res.send(`<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>切换 Antigravity 账号</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0f172a; color: #f8fafc; padding: 24px; text-align: center; }
+        .card { max-width: 400px; margin: 40px auto; background: #1e293b; border-radius: 16px; padding: 24px; box-shadow: 0 10px 25px rgba(0,0,0,0.5); }
+        h2 { margin-top: 0; font-size: 20px; color: #38bdf8; }
+        p { color: #94a3b8; font-size: 14px; line-height: 1.5; }
+        .btn { display: block; width: 100%; padding: 14px; margin: 12px 0; border: none; border-radius: 10px; font-size: 16px; font-weight: 600; cursor: pointer; transition: 0.2s; }
+        .btn-primary { background: #2563eb; color: #fff; }
+        .btn-primary:active { background: #1d4ed8; }
+        .btn-secondary { background: #059669; color: #fff; }
+        .btn-secondary:active { background: #047857; }
+        #status { margin-top: 16px; font-size: 14px; color: #fbbf24; }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h2>📱 远程账号切换</h2>
+        <p>在手机上轻按即可远程命令电脑切换 Antigravity 运行账号：</p>
+        <button class="btn btn-primary" onclick="switchAcc('default')">👤 切换到：默认主账号</button>
+        <button class="btn btn-secondary" onclick="switchAcc('account2')">👥 切换到：备用账号 2</button>
+        <div id="status"></div>
+    </div>
+    <script>
+        async function switchAcc(p) {
+            const st = document.getElementById('status');
+            st.innerText = '正在远程切换电脑上的 Antigravity 进程...';
+            try {
+                const r = await fetch('/api/account/switch?profile=' + p, { method: 'POST' });
+                const d = await r.json();
+                if (d.success) {
+                    st.innerText = '✅ 切换成功！正在启动新实例，请等待 3 秒后返回 App 刷新。';
+                } else {
+                    st.innerText = '❌ 切换失败: ' + (d.error || '未知错误');
+                }
+            } catch(e) {
+                st.innerText = '❌ 连接失败: ' + e.message;
+            }
+        }
+    </script>
+</body>
+</html>`);
+});
+
 // --- One-time device pairing (K2) ---
 // Phone submits the code shown on the PC once; gets a token it stores and sends
 // as `x-device-token` on every input request.

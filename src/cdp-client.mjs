@@ -7,7 +7,7 @@
  * - Page inspection
  */
 
-import { readFileSync, existsSync } from 'fs';
+import { readFileSync, existsSync, readdirSync } from 'fs';
 import { join } from 'path';
 import { EventEmitter } from 'events';
 
@@ -45,6 +45,21 @@ function devToolsSources() {
                 }
             } catch (e) { /* ignore unreadable */ }
         }
+        // Dynamic scan for any custom Antigravity profile (e.g. Antigravity_Account2)
+        try {
+            const entries = readdirSync(root, { withFileTypes: true });
+            for (const entry of entries) {
+                if (entry.isDirectory() && entry.name.toLowerCase().startsWith('antigravity')) {
+                    const f = join(root, entry.name, 'DevToolsActivePort');
+                    if (existsSync(f)) {
+                        const port = parseInt(readFileSync(f, 'utf-8').split(/\r?\n/)[0].trim());
+                        if (port > 0 && !out.find(s => s.port === port)) {
+                            out.push({ id: entry.name, name: entry.name, port });
+                        }
+                    }
+                }
+            }
+        } catch (e) { /* ignore read errors */ }
     }
     return out;
 }
