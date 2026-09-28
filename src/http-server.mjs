@@ -2896,16 +2896,28 @@ async function startServer() {
     }
 
     httpServer.listen(HTTP_PORT, '0.0.0.0', () => {
+        let lanIP = null, tailscaleIP = null;
+        const nets = networkInterfaces();
+        for (const [name, entries] of Object.entries(nets)) {
+            for (const net of entries || []) {
+                if (net.family !== 'IPv4' || net.internal) continue;
+                const isTs = name.toLowerCase().includes('tailscale') || /^100\./.test(net.address);
+                if (isTs && !tailscaleIP) tailscaleIP = net.address;
+                else if (net.address.startsWith('192.168.') && !net.address.endsWith('.1') && !lanIP) lanIP = net.address;
+            }
+        }
+
         console.log(`
 ╔════════════════════════════════════════════════════════╗
 ║       📱 Antigravity Mobile Bridge                     ║
 ╠════════════════════════════════════════════════════════╣
-║  Mobile UI:    http://localhost:${HTTP_PORT}                   ║
-║  Admin:        http://localhost:${HTTP_PORT}/admin              ║
-║  Auth:         ${authEnabled ? '🔐 ENABLED' : '🔓 Disabled'}                            ║
-║  Telegram:     ${tgConfig?.enabled ? '🤖 ENABLED' : '❌ Disabled'}                            ║
+║  🏠 Home Wi-Fi URL:  http://${(lanIP || '127.0.0.1')}:${HTTP_PORT}
+║  🌐 Tailscale URL:   http://${(tailscaleIP || 'N/A')}:${HTTP_PORT}
+║  💻 Local PC:        http://localhost:${HTTP_PORT}
+║  ⚙️  Admin:           http://localhost:${HTTP_PORT}/admin
+║  🔐 Auth:            ${authEnabled ? 'ENABLED' : 'Disabled (Frictionless)'}
 ╚════════════════════════════════════════════════════════╝
-    `);
+`);
 
         // Start workspace auto-detection
         startWorkspacePolling();
